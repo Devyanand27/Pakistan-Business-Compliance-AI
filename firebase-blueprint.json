@@ -1,0 +1,454 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account preferences and workspace settings stored per Firebase UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 180
+        },
+        "full_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin"]
+        },
+        "email_verified": {
+          "type": "boolean"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["en", "ur"]
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["light", "dark"]
+        },
+        "notifications_enabled": {
+          "type": "boolean"
+        },
+        "privacy_analytics": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "full_name", "role", "language", "theme", "createdAt", "updatedAt"]
+    },
+    "BusinessProfile": {
+      "title": "BusinessProfile",
+      "description": "User's Pakistani business profile context used to tailor compliance research and checklists.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "business_name": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "business_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "legal_structure": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "industry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "province": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "city": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "business_activity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "ownership_count": {
+          "type": "number"
+        },
+        "has_employees": {
+          "type": "boolean"
+        },
+        "sells_goods": {
+          "type": "boolean"
+        },
+        "provides_services": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "business_type",
+        "legal_structure",
+        "industry",
+        "province",
+        "city",
+        "business_activity",
+        "ownership_count",
+        "has_employees",
+        "sells_goods",
+        "provides_services",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "User-owned AI compliance research conversation header.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "is_saved": {
+          "type": "boolean"
+        },
+        "message_count": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "title", "is_saved", "message_count", "createdAt", "updatedAt"]
+    },
+    "ConversationMessage": {
+      "title": "ConversationMessage",
+      "description": "Individual user or grounded assistant message stored under a conversation.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "conversationId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 25000
+        },
+        "structured": {
+          "type": "object"
+        },
+        "evidence_level": {
+          "type": "string",
+          "enum": ["strong", "moderate", "insufficient", "none"]
+        },
+        "warning_text": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "citations": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "conversationId", "role", "content", "createdAt"]
+    },
+    "Checklist": {
+      "title": "Checklist",
+      "description": "User-owned compliance checklist container.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "title", "createdAt", "updatedAt"]
+    },
+    "ChecklistItem": {
+      "title": "ChecklistItem",
+      "description": "Actionable compliance task linked to official document citations or created personally.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "checklistId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 800
+        },
+        "applicable_business_type": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "authority_name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "source_document_id": {
+          "type": "number"
+        },
+        "source_chunk_id": {
+          "type": "number"
+        },
+        "citation_label": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "source_document_title": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "source_document_url": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "source_page_number": {
+          "type": "number"
+        },
+        "source_section_title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "source_is_superseded": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["not_started", "in_progress", "completed", "needs_review"]
+        },
+        "is_user_created": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 800
+        },
+        "last_reviewed_at": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "checklistId", "title", "description", "authority_name", "status", "is_user_created", "createdAt", "updatedAt"]
+    },
+    "SavedItem": {
+      "title": "SavedItem",
+      "description": "User-bookmarked compliance answer, citation, conversation, or official document.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "item_type": {
+          "type": "string",
+          "enum": ["conversation", "answer", "citation", "document"]
+        },
+        "item_reference_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "folder_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "item_type", "item_reference_id", "folder_name", "title", "createdAt"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "User-submitted feedback or outdated-citation report.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user_email": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "message_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "rating": {
+          "type": "string",
+          "enum": ["helpful", "not_helpful", "inaccurate", "outdated", "general"]
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "rating", "createdAt"]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Marker document indicating database-level administrator access.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        }
+      },
+      "required": ["uid"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account profile and workspace preferences (owner-only read/write)."
+    },
+    "/business_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/BusinessProfile" },
+      "description": "User's business structure and province profile keyed by Firebase UID (owner-only read/write)."
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "User-owned compliance research conversations."
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ConversationMessage" },
+      "description": "Messages inside a user-owned conversation."
+    },
+    "/checklists/{checklistId}": {
+      "schema": { "$ref": "#/entities/Checklist" },
+      "description": "User-owned compliance checklists."
+    },
+    "/checklists/{checklistId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/ChecklistItem" },
+      "description": "Tasks belonging to a user-owned compliance checklist."
+    },
+    "/saved_items/{savedId}": {
+      "schema": { "$ref": "#/entities/SavedItem" },
+      "description": "User-bookmarked research folders and notes."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": { "$ref": "#/entities/Feedback" },
+      "description": "User feedback and citation issue reports (owner create/read, admin read)."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Trusted database-backed administrator marker collection (read-only for owner/admin; no client writes)."
+    }
+  }
+}

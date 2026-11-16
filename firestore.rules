@@ -1,0 +1,342 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Default Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Shared Validation & Identity Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Verified email is strictly required for any email-based privilege check;
+    // owner writes also require real Firebase Auth with either verified email or password sign-in.
+    function isAuthenticatedAccount() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'password'
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email == 'nanddevya27@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
+    // 3. Entity Validators (Strict Keys, Types, Sizes, Temporal Integrity)
+    function isValidUserProfileCreate(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'full_name', 'role', 'language', 'theme', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'email', 'full_name', 'role', 'email_verified', 'language',
+          'theme', 'notifications_enabled', 'privacy_analytics', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && data.uid == request.auth.uid && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 180
+        && data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 120
+        && data.role == 'user'
+        && (!('email_verified' in data) || data.email_verified is bool)
+        && data.language in ['en', 'ur']
+        && data.theme in ['light', 'dark']
+        && (!('notifications_enabled' in data) || data.notifications_enabled is bool)
+        && (!('privacy_analytics' in data) || data.privacy_analytics is bool)
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidUserProfileUpdate(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'full_name', 'role', 'language', 'theme', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'email', 'full_name', 'role', 'email_verified', 'language',
+          'theme', 'notifications_enabled', 'privacy_analytics', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid == userId && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 180
+        && data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 120
+        && data.role in ['user', 'admin']
+        && (!('email_verified' in data) || data.email_verified is bool)
+        && data.language in ['en', 'ur']
+        && data.theme in ['light', 'dark']
+        && (!('notifications_enabled' in data) || data.notifications_enabled is bool)
+        && (!('privacy_analytics' in data) || data.privacy_analytics is bool)
+        && data.updatedAt == request.time;
+    }
+
+    function isValidBusinessProfile(data, userId) {
+      return data.keys().hasAll([
+          'userId', 'business_type', 'legal_structure', 'industry', 'province',
+          'city', 'business_activity', 'ownership_count', 'has_employees',
+          'sells_goods', 'provides_services', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'business_name', 'business_type', 'legal_structure', 'industry',
+          'province', 'city', 'business_activity', 'ownership_count', 'has_employees',
+          'sells_goods', 'provides_services', 'createdAt', 'updatedAt'
+        ])
+        && data.userId is string && data.userId == userId && data.userId == request.auth.uid && data.userId.size() <= 128
+        && (!('business_name' in data) || (data.business_name is string && data.business_name.size() <= 140))
+        && data.business_type is string && data.business_type.size() >= 1 && data.business_type.size() <= 80
+        && data.legal_structure is string && data.legal_structure.size() >= 1 && data.legal_structure.size() <= 40
+        && data.industry is string && data.industry.size() >= 1 && data.industry.size() <= 100
+        && data.province is string && data.province.size() >= 1 && data.province.size() <= 80
+        && data.city is string && data.city.size() >= 1 && data.city.size() <= 80
+        && data.business_activity is string && data.business_activity.size() >= 1 && data.business_activity.size() <= 300
+        && data.ownership_count is int && data.ownership_count >= 1 && data.ownership_count <= 200
+        && data.has_employees is bool
+        && data.sells_goods is bool
+        && data.provides_services is bool
+        && (data.sells_goods == true || data.provides_services == true)
+        && data.updatedAt == request.time;
+    }
+
+    function isValidConversation(data) {
+      return data.keys().hasAll(['userId', 'title', 'is_saved', 'message_count', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'title', 'is_saved', 'message_count', 'createdAt', 'updatedAt'])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.is_saved is bool
+        && data.message_count is int && data.message_count >= 0 && data.message_count <= 5000
+        && data.updatedAt == request.time;
+    }
+
+    function isValidMessage(data, convId) {
+      return data.keys().hasAll(['userId', 'conversationId', 'role', 'content', 'createdAt'])
+        && data.keys().hasOnly([
+          'userId', 'conversationId', 'role', 'content', 'structured',
+          'evidence_level', 'warning_text', 'citations', 'createdAt'
+        ])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && data.conversationId is string && data.conversationId == convId && data.conversationId.size() <= 128
+        && data.role in ['user', 'assistant']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 25000
+        && (!('structured' in data) || data.structured == null || data.structured is map)
+        && (!('evidence_level' in data) || data.evidence_level in ['strong', 'moderate', 'insufficient', 'none'])
+        && (!('warning_text' in data) || (data.warning_text is string && data.warning_text.size() <= 1000))
+        && (!('citations' in data) || (data.citations is list && data.citations.size() <= 20))
+        && data.createdAt == request.time;
+    }
+
+    function isValidChecklist(data) {
+      return data.keys().hasAll(['userId', 'title', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'title', 'createdAt', 'updatedAt'])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 180
+        && data.updatedAt == request.time;
+    }
+
+    function isValidChecklistItem(data, listId) {
+      return data.keys().hasAll([
+          'userId', 'checklistId', 'title', 'description', 'authority_name',
+          'status', 'is_user_created', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'checklistId', 'title', 'description', 'applicable_business_type',
+          'authority_name', 'source_document_id', 'source_chunk_id', 'citation_label',
+          'source_document_title', 'source_document_url', 'source_page_number',
+          'source_section_title', 'source_is_superseded', 'status', 'is_user_created',
+          'notes', 'last_reviewed_at', 'createdAt', 'updatedAt'
+        ])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && data.checklistId is string && data.checklistId == listId && data.checklistId.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 180
+        && data.description is string && data.description.size() <= 800
+        && data.authority_name is string && data.authority_name.size() <= 80
+        && (!('applicable_business_type' in data) || (data.applicable_business_type is string && data.applicable_business_type.size() <= 80))
+        && (!('citation_label' in data) || (data.citation_label is string && data.citation_label.size() <= 300))
+        && (!('source_document_title' in data) || (data.source_document_title is string && data.source_document_title.size() <= 240))
+        && (!('source_document_url' in data) || (data.source_document_url is string && data.source_document_url.size() <= 500))
+        && (!('source_section_title' in data) || (data.source_section_title is string && data.source_section_title.size() <= 200))
+        && (!('source_document_id' in data) || data.source_document_id == null || data.source_document_id is int)
+        && (!('source_chunk_id' in data) || data.source_chunk_id == null || data.source_chunk_id is int)
+        && (!('source_page_number' in data) || data.source_page_number == null || data.source_page_number is int)
+        && (!('source_is_superseded' in data) || data.source_is_superseded is bool)
+        && data.status in ['not_started', 'in_progress', 'completed', 'needs_review']
+        && data.is_user_created is bool
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 800))
+        && (!('last_reviewed_at' in data) || (data.last_reviewed_at is string && data.last_reviewed_at.size() <= 40))
+        && data.updatedAt == request.time;
+    }
+
+    function isValidSavedItem(data) {
+      return data.keys().hasAll(['userId', 'item_type', 'item_reference_id', 'folder_name', 'title', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'item_type', 'item_reference_id', 'folder_name', 'title', 'excerpt', 'notes', 'createdAt'])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && data.item_type in ['conversation', 'answer', 'citation', 'document']
+        && data.item_reference_id is string && data.item_reference_id.size() >= 1 && data.item_reference_id.size() <= 128
+        && data.folder_name is string && data.folder_name.size() >= 1 && data.folder_name.size() <= 80
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && (!('excerpt' in data) || (data.excerpt is string && data.excerpt.size() <= 1500))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+    }
+
+    function isValidFeedback(data) {
+      return data.keys().hasAll(['userId', 'rating', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'user_email', 'message_id', 'rating', 'comment', 'createdAt'])
+        && data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128
+        && (!('user_email' in data) || (data.user_email is string && data.user_email.size() <= 180))
+        && (!('message_id' in data) || (data.message_id is string && data.message_id.size() <= 128))
+        && data.rating in ['helpful', 'not_helpful', 'inaccurate', 'outdated', 'general']
+        && (!('comment' in data) || (data.comment is string && data.comment.size() <= 1000))
+        && data.createdAt == request.time;
+    }
+
+    // 4. Collection Rules
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isValidId(userId) && isAuthenticatedAccount()
+        && request.auth.uid == userId
+        && isValidUserProfileCreate(incoming(), userId);
+      allow update: if isValidId(userId) && isAuthenticatedAccount()
+        && (request.auth.uid == userId || isAdmin())
+        && isValidUserProfileUpdate(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && (
+          isAdmin() ||
+          (
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'full_name', 'language', 'theme', 'notifications_enabled', 'privacy_analytics', 'email_verified', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(userId) && isAuthenticatedAccount() && request.auth.uid == userId;
+    }
+
+    match /business_profiles/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isValidId(userId) && isAuthenticatedAccount()
+        && request.auth.uid == userId
+        && isValidBusinessProfile(incoming(), userId)
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(userId) && isAuthenticatedAccount()
+        && request.auth.uid == userId
+        && isValidBusinessProfile(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'business_name', 'business_type', 'legal_structure', 'industry',
+          'province', 'city', 'business_activity', 'ownership_count',
+          'has_employees', 'sells_goods', 'provides_services', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isAuthenticatedAccount() && request.auth.uid == userId;
+    }
+
+    match /conversations/{conversationId} {
+      allow get: if isValidId(conversationId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(conversationId) && isAuthenticatedAccount()
+        && isValidConversation(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(conversationId) && isAuthenticatedAccount()
+        && isValidConversation(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'is_saved', 'message_count', 'updatedAt']);
+      allow delete: if isValidId(conversationId) && isAuthenticatedAccount() && existing().userId == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow get: if isValidId(conversationId) && isValidId(messageId) && isSignedIn()
+          && exists(/databases/$(database)/documents/conversations/$(conversationId))
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid;
+        allow list: if isValidId(conversationId) && isSignedIn()
+          && existing().userId == request.auth.uid;
+        allow create: if isValidId(conversationId) && isValidId(messageId) && isAuthenticatedAccount()
+          && isValidMessage(incoming(), conversationId)
+          && existsAfter(/databases/$(database)/documents/conversations/$(conversationId))
+          && getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid;
+        allow delete: if isValidId(conversationId) && isValidId(messageId) && isAuthenticatedAccount()
+          && exists(/databases/$(database)/documents/conversations/$(conversationId))
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid;
+      }
+    }
+
+    match /checklists/{checklistId} {
+      allow get: if isValidId(checklistId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(checklistId) && isAuthenticatedAccount()
+        && isValidChecklist(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(checklistId) && isAuthenticatedAccount()
+        && isValidChecklist(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']);
+      allow delete: if isValidId(checklistId) && isAuthenticatedAccount() && existing().userId == request.auth.uid;
+
+      match /items/{itemId} {
+        allow get: if isValidId(checklistId) && isValidId(itemId) && isSignedIn()
+          && exists(/databases/$(database)/documents/checklists/$(checklistId))
+          && get(/databases/$(database)/documents/checklists/$(checklistId)).data.userId == request.auth.uid;
+        allow list: if isValidId(checklistId) && isSignedIn()
+          && existing().userId == request.auth.uid;
+        allow create: if isValidId(checklistId) && isValidId(itemId) && isAuthenticatedAccount()
+          && isValidChecklistItem(incoming(), checklistId)
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/checklists/$(checklistId))
+          && getAfter(/databases/$(database)/documents/checklists/$(checklistId)).data.userId == request.auth.uid;
+        allow update: if isValidId(checklistId) && isValidId(itemId) && isAuthenticatedAccount()
+          && isValidChecklistItem(incoming(), checklistId)
+          && exists(/databases/$(database)/documents/checklists/$(checklistId))
+          && get(/databases/$(database)/documents/checklists/$(checklistId)).data.userId == request.auth.uid
+          && existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().checklistId == existing().checklistId
+          && incoming().createdAt == existing().createdAt
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'last_reviewed_at', 'updatedAt']) ||
+            (existing().is_user_created == true && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'status', 'notes', 'last_reviewed_at', 'updatedAt']))
+          );
+        allow delete: if isValidId(checklistId) && isValidId(itemId) && isAuthenticatedAccount()
+          && exists(/databases/$(database)/documents/checklists/$(checklistId))
+          && get(/databases/$(database)/documents/checklists/$(checklistId)).data.userId == request.auth.uid;
+      }
+    }
+
+    match /saved_items/{savedId} {
+      allow get: if isValidId(savedId) && isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isValidId(savedId) && isAuthenticatedAccount()
+        && isValidSavedItem(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(savedId) && isAuthenticatedAccount()
+        && isValidSavedItem(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().item_type == existing().item_type
+        && incoming().item_reference_id == existing().item_reference_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['folder_name', 'notes']);
+      allow delete: if isValidId(savedId) && isAuthenticatedAccount() && existing().userId == request.auth.uid;
+    }
+
+    match /feedback/{feedbackId} {
+      allow get: if isValidId(feedbackId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(feedbackId) && isAuthenticatedAccount() && isValidFeedback(incoming());
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if false;
+    }
+  }
+}

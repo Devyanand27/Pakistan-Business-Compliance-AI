@@ -1,0 +1,6 @@
+{
+  "name": "Pakistan Business Compliance AI",
+  "description": "Official-source-grounded AI compliance research platform for Pakistani startups, SMEs, freelancers, and tax professionals covering SECP, FBR, and SRB regulations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
