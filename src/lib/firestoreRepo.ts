@@ -27,8 +27,6 @@ import {
 } from '../types/compliance';
 import { db, handleFirestoreError, OperationType } from './firebase';
 
-const BOOTSTRAPPED_ADMIN_EMAIL = 'nanddevya27@gmail.com';
-
 function tsToIso(val: any): string {
   if (!val) return new Date().toISOString();
   if (typeof val === 'string') return val;
@@ -38,14 +36,13 @@ function tsToIso(val: any): string {
 }
 
 export async function resolveUserRole(fbUser: FirebaseUser, storedRole?: string): Promise<'user' | 'admin'> {
-  if (fbUser.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL && fbUser.emailVerified) {
-    return 'admin';
-  }
-  try {
-    const adminSnap = await getDoc(doc(db, 'admins', fbUser.uid));
-    if (adminSnap.exists()) return 'admin';
-  } catch {
-    // Non-admin users may not have an admin marker; fall back cleanly
+  if (fbUser.emailVerified) {
+    try {
+      const adminSnap = await getDoc(doc(db, 'admins', fbUser.uid));
+      if (adminSnap.exists()) return 'admin';
+    } catch {
+      // Non-admin users may not have an admin marker; fall back cleanly
+    }
   }
   return storedRole === 'admin' ? 'admin' : 'user';
 }

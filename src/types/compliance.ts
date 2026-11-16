@@ -105,6 +105,13 @@ export interface StructuredAnswer {
   conflict_detected: boolean;
   conflict_summary: string;
   retrieval_mode?: string;
+  provider_meta?: {
+    provider_used: 'gemini' | 'openrouter';
+    model_used: string;
+    fallback_triggered?: boolean;
+    fallback_reason?: string;
+    cached?: boolean;
+  };
   disclaimer?: string;
 }
 

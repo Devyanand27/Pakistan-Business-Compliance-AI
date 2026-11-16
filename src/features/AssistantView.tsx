@@ -529,6 +529,18 @@ export function AssistantView({
                           </span>
                         </>
                       )}
+                      {s?.provider_meta && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono text-[11px]">
+                            {s.provider_meta.provider_used === 'openrouter'
+                              ? s.provider_meta.fallback_triggered
+                                ? 'OpenRouter (Fallback)'
+                                : 'OpenRouter'
+                              : 'Gemini'}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
 

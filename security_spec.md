@@ -9,7 +9,7 @@
 6. A checklist item at `/checklists/{checklistId}/items/{itemId}` can only be accessed if the parent `/checklists/{checklistId}` exists AND belongs to `request.auth.uid` (Master Gate relational sync).
 7. Saved research items at `/saved_items/{savedId}` are strictly scoped to `userId == request.auth.uid`.
 8. Feedback documents at `/feedback/{feedbackId}` can be created by their owner (`userId == request.auth.uid`) and read only by their owner or a verified admin (`isAdmin()`).
-9. Admin markers at `/admins/{userId}` are immutable to clients (`allow write: if false;`) and `isAdmin()` checks both `/admins/$(request.auth.uid)` and the bootstrapped runtime admin email ONLY when `request.auth.token.email_verified == true`.
+9. Admin markers at `/admins/{userId}` are immutable to clients (`allow write: if false;`) and `isAdmin()` checks `/admins/$(request.auth.uid)` ONLY when `request.auth.token.email_verified == true`.
 
 ## The Dirty Dozen Adversarial Payloads (Must All Return PERMISSION_DENIED)
 1. Unauthenticated read/list on `/users/uid1`, `/conversations`, `/checklists`, `/saved_items`.

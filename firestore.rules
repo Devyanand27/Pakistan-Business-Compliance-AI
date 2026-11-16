@@ -34,10 +34,8 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (request.auth.token.email == 'nanddevya27@gmail.com' && request.auth.token.email_verified == true)
-      );
+      return isSignedIn() && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
     // 3. Entity Validators (Strict Keys, Types, Sizes, Temporal Integrity)

@@ -1,5 +1,6 @@
+import { getServerConfig } from '../config/env.js';
 import { db } from '../db/database.js';
-import { embedTexts, RetrievedChunkForPrompt } from '../services/gemini.js';
+import { embedSingleQueryCached, RetrievedChunkForPrompt } from '../services/gemini.js';
 
 function cosineSimilarity(a: Float32Array, bBuffer: Buffer): number {
   if (!bBuffer || bBuffer.byteLength === 0) return 0;
@@ -51,11 +52,12 @@ export async function retrieveRelevantChunks(params: {
   onlyVerifiedOfficial?: boolean;
 }): Promise<{ chunks: RetrievedChunkForPrompt[]; retrievalMode: 'hybrid_vector_fts' | 'lexical_fts' }> {
   const topK = params.topK ?? 8;
+  const activeEmbeddingModel = getServerConfig().embeddingModel;
   const whereClauses = [`d.status IN ('published', 'superseded', 'conflict_review')`];
   const sqlParams: any[] = [];
 
   if (!params.includeSuperseded) {
-    // Still allow superseded docs if query mentions legacy forms like "form 29", otherwise prioritize current
+    // Allow superseded records when relevant, sorted below current rules unless explicitly queried
   }
   if (params.onlyVerifiedOfficial !== false) {
     whereClauses.push(`d.verification_status = 'verified_official'`);
@@ -68,7 +70,7 @@ export async function retrieveRelevantChunks(params: {
   const allCandidateRows = db
     .prepare(
       `SELECT dc.id as chunk_id, dc.document_id, dc.chunk_text, dc.page_number, dc.section_title,
-              dc.embedding, dc.embedding_dim,
+              dc.embedding, dc.embedding_dim, dc.embedding_model,
               d.title as document_title, d.source_url, d.document_type, d.publication_date,
               d.effective_date, d.version, d.is_superseded, d.verification_status, d.status,
               COALESCE(a.name, 'General Authority') as authority_name
@@ -98,7 +100,6 @@ export async function retrieveRelevantChunks(params: {
         )
         .all(ftsQuery) as any[];
       ftsRows.forEach((r, idx) => {
-        // Normalize rank position + bm25 magnitude
         ftsScores.set(r.chunk_id, 1 / (idx + 1) + Math.min(1, Math.abs(r.rank) / 15));
       });
     } catch {
@@ -106,14 +107,16 @@ export async function retrieveRelevantChunks(params: {
     }
   }
 
-  // 2. Vector similarity via Gemini embeddings if available
-  const hasAnyVectors = allCandidateRows.some((r) => r.embedding_dim > 0 && r.embedding);
+  // 2. Vector similarity ONLY against chunks indexed with the active embedding_model (never mix models)
+  const hasCompatibleVectors = allCandidateRows.some(
+    (r) =>
+      r.embedding_dim > 0 &&
+      r.embedding &&
+      (!r.embedding_model || r.embedding_model === activeEmbeddingModel)
+  );
   let queryVec: Float32Array | null = null;
-  if (hasAnyVectors) {
-    const emb = await embedTexts([params.query]);
-    if (emb && emb[0]) {
-      queryVec = emb[0];
-    }
+  if (hasCompatibleVectors) {
+    queryVec = await embedSingleQueryCached(params.query);
   }
 
   const queryTerms = params.query
@@ -121,8 +124,17 @@ export async function retrieveRelevantChunks(params: {
     .split(/\s+/)
     .filter((w) => w.length > 2 && !STOPWORDS.has(w));
 
+  let matchedVectorChunkCount = 0;
+
   const scored = allCandidateRows.map((row) => {
-    const vecSim = queryVec && row.embedding ? cosineSimilarity(queryVec, row.embedding) : 0;
+    const modelCompatible = !row.embedding_model || row.embedding_model === activeEmbeddingModel;
+    const dimCompatible = queryVec && row.embedding_dim === queryVec.length;
+    const vecSim =
+      queryVec && row.embedding && modelCompatible && dimCompatible
+        ? cosineSimilarity(queryVec, row.embedding)
+        : 0;
+    if (vecSim !== 0) matchedVectorChunkCount += 1;
+
     const ftsScore = ftsScores.get(row.chunk_id) || 0;
 
     // Exact keyword / title boost
@@ -133,12 +145,12 @@ export async function retrieveRelevantChunks(params: {
     }
     const keywordScore = queryTerms.length > 0 ? keywordHits / queryTerms.length : 0;
 
-    // Penalize superseded documents slightly unless query explicitly mentions old term
+    // Penalize superseded documents unless query explicitly mentions legacy term
     const mentionsLegacy = /form\s*29|old\s+form|previous|repealed|superseded/i.test(params.query);
     const supersededPenalty = row.is_superseded && !mentionsLegacy ? -0.18 : 0;
 
     const combined =
-      (queryVec ? vecSim * 0.58 : 0) +
+      (vecSim > 0 ? vecSim * 0.58 : 0) +
       ftsScore * 0.28 +
       keywordScore * 0.35 +
       supersededPenalty;
@@ -164,11 +176,10 @@ export async function retrieveRelevantChunks(params: {
 
   scored.sort((a, b) => b.score - a.score);
 
-  // Filter out completely zero-relevance chunks unless we have vector similarity
   const filtered = scored.filter((c) => c.score > 0.08).slice(0, topK);
 
   return {
     chunks: filtered,
-    retrievalMode: queryVec ? 'hybrid_vector_fts' : 'lexical_fts',
+    retrievalMode: matchedVectorChunkCount > 0 ? 'hybrid_vector_fts' : 'lexical_fts',
   };
 }

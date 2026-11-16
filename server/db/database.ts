@@ -113,6 +113,7 @@ export function initSchema(): void {
       chunk_index INTEGER NOT NULL,
       embedding BLOB,
       embedding_dim INTEGER NOT NULL DEFAULT 0,
+      embedding_model TEXT NOT NULL DEFAULT '',
       metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -248,9 +249,14 @@ export function initSchema(): void {
     );
   `);
 
-  // Ensure actor_uid column exists on pre-existing databases
+  // Safe migrations for pre-existing databases
   const auditCols = db.prepare(`PRAGMA table_info(audit_logs)`).all() as Array<{ name: string }>;
   if (!auditCols.some((c) => c.name === 'actor_uid')) {
     db.exec(`ALTER TABLE audit_logs ADD COLUMN actor_uid TEXT DEFAULT ''`);
+  }
+
+  const chunkCols = db.prepare(`PRAGMA table_info(document_chunks)`).all() as Array<{ name: string }>;
+  if (!chunkCols.some((c) => c.name === 'embedding_model')) {
+    db.exec(`ALTER TABLE document_chunks ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''`);
   }
 }

@@ -1,13 +1,14 @@
 import express from 'express';
 import multer from 'multer';
+import { hasAnyAiProvider } from '../config/env.js';
 import { db } from '../db/database.js';
 import { extractDocumentContent } from '../ingestion/extractor.js';
 import { retrieveRelevantChunks } from '../rag/retriever.js';
 import { requireAuth } from '../security/auth.js';
 import { sanitizeTextInput } from '../security/ssrf.js';
+import { AiProviderError } from '../services/aiProvider.js';
 import {
   generateComparisonWithGemini,
-  hasGeminiKey,
   summarizeDocumentWithGemini,
 } from '../services/gemini.js';
 
@@ -17,6 +18,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.html', '.htm', '.csv', '.png', '.jpg', '.jpeg'];
 
 router.get('/documents/authorities', (_req, res) => {
   const authorities = db.prepare(`SELECT * FROM authorities WHERE is_active = 1 ORDER BY id ASC`).all();
@@ -109,6 +112,10 @@ router.get('/documents', (req, res) => {
 
 router.get('/documents/:id', (req, res) => {
   const docId = Number(req.params.id);
+  if (!Number.isInteger(docId) || docId <= 0) {
+    res.status(400).json({ error: 'Invalid document ID.' });
+    return;
+  }
   const doc = db
     .prepare(
       `SELECT d.id, d.title, d.source_url, d.document_type, d.document_number,
@@ -140,6 +147,10 @@ router.get('/documents/:id', (req, res) => {
 
 router.get('/documents/:id/versions', (req, res) => {
   const docId = Number(req.params.id);
+  if (!Number.isInteger(docId) || docId <= 0) {
+    res.status(400).json({ error: 'Invalid document ID.' });
+    return;
+  }
   const current = db.prepare(`SELECT id, title, previous_version_id, superseded_by_id FROM documents WHERE id = ?`).get(docId) as any;
   if (!current) {
     res.status(404).json({ error: 'Document not found.' });
@@ -160,10 +171,10 @@ router.get('/documents/:id/versions', (req, res) => {
 
 router.post('/documents/summarize', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    if (!hasGeminiKey()) {
+    if (!hasAnyAiProvider()) {
       res.status(503).json({
         code: 'AI_PROVIDER_UNAVAILABLE',
-        error: 'GEMINI_API_KEY is not configured on the server for document summarization.',
+        error: 'No AI provider key (GEMINI_API_KEY or OPENROUTER_API_KEY) is configured on the server for document summarization.',
       });
       return;
     }
@@ -171,8 +182,15 @@ router.post('/documents/summarize', requireAuth, upload.single('file'), async (r
     const language = req.body?.language === 'ur' ? 'ur' : 'en';
 
     if (req.file) {
+      const lowerName = req.file.originalname.toLowerCase();
+      if (!ALLOWED_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
+        res.status(400).json({
+          error: `Unsupported file format. Allowed formats: ${ALLOWED_EXTENSIONS.join(', ')}`,
+        });
+        return;
+      }
       const extracted = await extractDocumentContent(req.file.buffer, req.file.originalname, req.file.mimetype);
-      const summary = await summarizeDocumentWithGemini({
+      const { data: summary, meta: providerMeta } = await summarizeDocumentWithGemini({
         title: req.file.originalname,
         authority: 'User Uploaded Document (Unverified)',
         verificationStatus: 'user_uploaded_unverified',
@@ -190,12 +208,13 @@ router.post('/documents/summarize', requireAuth, upload.single('file'), async (r
           ocr_used: extracted.ocrUsed,
         },
         summary,
+        provider_meta: providerMeta,
       });
       return;
     }
 
     const documentId = Number(req.body?.document_id);
-    if (!documentId) {
+    if (!Number.isInteger(documentId) || documentId <= 0) {
       res.status(400).json({ error: 'Please select an indexed document or upload a file to summarize.' });
       return;
     }
@@ -213,12 +232,13 @@ router.post('/documents/summarize', requireAuth, upload.single('file'), async (r
       return;
     }
 
-    const summary = await summarizeDocumentWithGemini({
+    const { data: summary, meta: providerMeta } = await summarizeDocumentWithGemini({
       title: doc.title,
       authority: doc.authority_name,
       verificationStatus: doc.verification_status,
       text: doc.raw_text,
       language,
+      cacheKey: `doc:${doc.id}:${doc.checksum}:${language}`,
     });
 
     res.json({
@@ -232,9 +252,14 @@ router.post('/documents/summarize', requireAuth, upload.single('file'), async (r
         page_count: doc.page_count,
       },
       summary,
+      provider_meta: providerMeta,
     });
   } catch (err) {
     console.error('[Summarize Error]', (err as Error).message);
+    if (err instanceof AiProviderError) {
+      res.status(err.status).json({ code: err.code, error: err.message });
+      return;
+    }
     res.status(502).json({ error: `Summarization failed: ${(err as Error).message}` });
   }
 });
@@ -250,10 +275,10 @@ router.post('/compare', requireAuth, async (req, res) => {
       return;
     }
 
-    if (!hasGeminiKey()) {
+    if (!hasAnyAiProvider()) {
       res.status(503).json({
         code: 'AI_PROVIDER_UNAVAILABLE',
-        error: 'GEMINI_API_KEY is required on the server to synthesize grounded structure comparisons.',
+        error: 'No AI provider key (GEMINI_API_KEY or OPENROUTER_API_KEY) is configured on the server to synthesize grounded structure comparisons.',
       });
       return;
     }
@@ -264,7 +289,7 @@ router.post('/compare', requireAuth, async (req, res) => {
       topK: 10,
     });
 
-    const comparison = await generateComparisonWithGemini({
+    const { data: comparison, meta: providerMeta } = await generateComparisonWithGemini({
       structures,
       retrievedChunks: retrieval.chunks,
       language,
@@ -295,9 +320,13 @@ router.post('/compare', requireAuth, async (req, res) => {
       }
     }
 
-    res.json({ comparison, sources: sourcesUsed });
+    res.json({ comparison, sources: sourcesUsed, provider_meta: providerMeta });
   } catch (err) {
     console.error('[Compare Error]', (err as Error).message);
+    if (err instanceof AiProviderError) {
+      res.status(err.status).json({ code: err.code, error: err.message });
+      return;
+    }
     res.status(502).json({ error: `Comparison generation failed: ${(err as Error).message}` });
   }
 });

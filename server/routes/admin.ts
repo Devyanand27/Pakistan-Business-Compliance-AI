@@ -121,6 +121,10 @@ router.get('/ingestion-jobs', (_req, res) => {
 router.post('/ingestion-jobs/:id/retry', async (req, res) => {
   try {
     const jobId = Number(req.params.id);
+    if (!Number.isInteger(jobId) || jobId <= 0) {
+      res.status(400).json({ error: 'Invalid ingestion job ID.' });
+      return;
+    }
     const result = await retryIngestionJob(jobId);
     logAudit(req.user!.uid, 'ADMIN_RETRY_JOB', 'ingestion_job', jobId);
     res.json(result);
@@ -131,6 +135,10 @@ router.post('/ingestion-jobs/:id/retry', async (req, res) => {
 
 router.patch('/documents/:id/status', (req, res) => {
   const docId = Number(req.params.id);
+  if (!Number.isInteger(docId) || docId <= 0) {
+    res.status(400).json({ error: 'Invalid document ID.' });
+    return;
+  }
   const status = req.body?.status;
   if (!['published', 'draft', 'superseded', 'outdated', 'conflict_review'].includes(status)) {
     res.status(400).json({ error: 'Invalid document status.' });

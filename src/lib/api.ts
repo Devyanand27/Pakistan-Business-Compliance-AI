@@ -1,5 +1,14 @@
 import { auth } from './firebase';
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+
+export function resolveApiUrl(url: string): string {
+  if (url.startsWith('/api') && API_BASE_URL) {
+    return `${API_BASE_URL}${url}`;
+  }
+  return url;
+}
+
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -28,7 +37,7 @@ async function doFetch(url: string, options: RequestInit, forceRefresh = false):
     }
   }
 
-  return fetch(url, {
+  return fetch(resolveApiUrl(url), {
     ...options,
     headers,
   });

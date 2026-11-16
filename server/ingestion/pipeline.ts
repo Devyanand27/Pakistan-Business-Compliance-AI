@@ -146,12 +146,13 @@ export async function ingestDocumentBuffer(
         ? options.title.trim()
         : extracted.detectedTitle || tentativeTitle;
 
+    const embeddingModel = getServerConfig().embeddingModel;
     const chunks = chunkDocumentText(extracted.text);
     const embeddings = await embedTexts(chunks.map((c) => `${finalTitle} — ${c.sectionTitle}\n${c.chunkText}`));
 
     const insertChunk = db.prepare(
-      `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, embedding_model, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     const tx = db.transaction(() => {
@@ -170,6 +171,7 @@ export async function ingestDocumentBuffer(
           chunk.chunkIndex,
           blob,
           vec ? vec.length : 0,
+          vec ? embeddingModel : '',
           JSON.stringify({
             title: finalTitle,
             source_url: options.sourceUrl,
@@ -305,14 +307,15 @@ export async function retryIngestionJob(jobId: number): Promise<any> {
     if (doc?.file_path && fs.existsSync(doc.file_path)) {
       const buffer = fs.readFileSync(doc.file_path);
       const extracted = await extractDocumentContent(buffer, path.basename(doc.file_path));
+      const embeddingModel = getServerConfig().embeddingModel;
       const chunks = chunkDocumentText(extracted.text);
       const embeddings = await embedTexts(chunks.map((c) => `${doc.title} — ${c.sectionTitle}\n${c.chunkText}`));
 
       const tx = db.transaction(() => {
         db.prepare(`DELETE FROM document_chunks WHERE document_id = ?`).run(doc.id);
         const insertChunk = db.prepare(
-          `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, metadata)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, embedding_model, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         chunks.forEach((chunk, idx) => {
           const vec = embeddings?.[idx];
@@ -325,6 +328,7 @@ export async function retryIngestionJob(jobId: number): Promise<any> {
             chunk.chunkIndex,
             blob,
             vec ? vec.length : 0,
+            vec ? embeddingModel : '',
             JSON.stringify({ title: doc.title, source_url: doc.source_url, page: chunk.pageNumber })
           );
         });
@@ -343,4 +347,45 @@ export async function retryIngestionJob(jobId: number): Promise<any> {
   }
 
   throw new Error('Cannot retry job: original source file or URL could not be located.');
+}
+
+export async function reembedOutdatedChunks(limit = 64): Promise<{ updated: number; model: string }> {
+  const embeddingModel = getServerConfig().embeddingModel;
+  const rows = db
+    .prepare(
+      `SELECT dc.id, dc.chunk_text, dc.section_title, d.title as document_title
+       FROM document_chunks dc
+       JOIN documents d ON d.id = dc.document_id
+       WHERE dc.embedding_dim = 0 OR dc.embedding_model != ?
+       LIMIT ?`
+    )
+    .all(embeddingModel, limit) as Array<{
+    id: number;
+    chunk_text: string;
+    section_title: string;
+    document_title: string;
+  }>;
+
+  if (rows.length === 0) return { updated: 0, model: embeddingModel };
+
+  const vectors = await embedTexts(
+    rows.map((r) => `${r.document_title} — ${r.section_title}\n${r.chunk_text}`)
+  );
+  if (!vectors || vectors.length !== rows.length) {
+    return { updated: 0, model: embeddingModel };
+  }
+
+  const updateStmt = db.prepare(
+    `UPDATE document_chunks SET embedding = ?, embedding_dim = ?, embedding_model = ? WHERE id = ?`
+  );
+  const tx = db.transaction(() => {
+    rows.forEach((row, idx) => {
+      const vec = vectors[idx];
+      const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+      updateStmt.run(blob, vec.length, embeddingModel, row.id);
+    });
+  });
+  tx();
+
+  return { updated: rows.length, model: embeddingModel };
 }

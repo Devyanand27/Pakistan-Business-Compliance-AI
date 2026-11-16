@@ -1,8 +1,10 @@
 import express from 'express';
+import { hasAnyAiProvider } from '../config/env.js';
 import { retrieveRelevantChunks } from '../rag/retriever.js';
 import { logAudit, requireAuth } from '../security/auth.js';
 import { sanitizeTextInput } from '../security/ssrf.js';
-import { generateChecklistFromEvidence, hasGeminiKey } from '../services/gemini.js';
+import { AiProviderError } from '../services/aiProvider.js';
+import { generateChecklistFromEvidence } from '../services/gemini.js';
 
 const router = express.Router();
 
@@ -20,10 +22,10 @@ router.post('/checklists/generate', requireAuth, async (req, res) => {
       return;
     }
 
-    if (!hasGeminiKey()) {
+    if (!hasAnyAiProvider()) {
       res.status(503).json({
         code: 'AI_PROVIDER_UNAVAILABLE',
-        error: 'GEMINI_API_KEY is not configured on the server to generate grounded compliance checklists.',
+        error: 'No AI provider key (GEMINI_API_KEY or OPENROUTER_API_KEY) is configured on the server to generate grounded compliance checklists.',
       });
       return;
     }
@@ -44,7 +46,7 @@ router.post('/checklists/generate', requireAuth, async (req, res) => {
       return;
     }
 
-    const generated = await generateChecklistFromEvidence({
+    const { data: generated, meta: providerMeta } = await generateChecklistFromEvidence({
       businessProfile: profile,
       focusTopic,
       retrievedChunks: retrieval.chunks,
@@ -86,10 +88,20 @@ router.post('/checklists/generate', requireAuth, async (req, res) => {
       };
     });
 
-    logAudit(req.user!.uid, 'CHECKLIST_GENERATE', 'checklist', '', `Items: ${items.length}`);
-    res.status(200).json({ title, items });
+    logAudit(
+      req.user!.uid,
+      'CHECKLIST_GENERATE',
+      'checklist',
+      '',
+      `Items: ${items.length}, Provider: ${providerMeta.provider_used}`
+    );
+    res.status(200).json({ title, items, provider_meta: providerMeta });
   } catch (err) {
     console.error('[Checklist Generate Error]', (err as Error).message);
+    if (err instanceof AiProviderError) {
+      res.status(err.status).json({ code: err.code, error: err.message });
+      return;
+    }
     res.status(502).json({ error: `Checklist generation failed: ${(err as Error).message}` });
   }
 });

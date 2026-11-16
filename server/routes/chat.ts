@@ -1,8 +1,10 @@
 import express from 'express';
+import { hasAnyAiProvider } from '../config/env.js';
 import { retrieveRelevantChunks } from '../rag/retriever.js';
 import { logAudit, requireAuth } from '../security/auth.js';
 import { sanitizeTextInput } from '../security/ssrf.js';
-import { generateGroundedComplianceAnswer, hasGeminiKey } from '../services/gemini.js';
+import { AiProviderError } from '../services/aiProvider.js';
+import { generateGroundedComplianceAnswer } from '../services/gemini.js';
 
 const router = express.Router();
 
@@ -69,11 +71,11 @@ router.post('/chat', requireAuth, async (req, res) => {
       return;
     }
 
-    if (!hasGeminiKey()) {
+    if (!hasAnyAiProvider()) {
       res.status(503).json({
         code: 'AI_PROVIDER_UNAVAILABLE',
         error:
-          'The Gemini AI service key (GEMINI_API_KEY) is not configured on the server. Configure GEMINI_API_KEY in AI Studio Secrets to run grounded RAG queries.',
+          'No AI provider key (GEMINI_API_KEY or OPENROUTER_API_KEY) is configured on the server. Configure an AI provider key in environment secrets to run grounded RAG queries.',
       });
       return;
     }
@@ -84,7 +86,7 @@ router.post('/chat', requireAuth, async (req, res) => {
       authorityCode: authorityFilter || undefined,
     });
 
-    const answerPayload = await generateGroundedComplianceAnswer({
+    const { data: answerPayload, meta: providerMeta } = await generateGroundedComplianceAnswer({
       question,
       language,
       businessProfile,
@@ -151,7 +153,13 @@ router.post('/chat', requireAuth, async (req, res) => {
       });
     }
 
-    logAudit(uid, 'RAG_CHAT_QUERY', 'chat', '', `Chunks: ${retrieval.chunks.length}, Evidence: ${evidenceLevel}`);
+    logAudit(
+      uid,
+      'RAG_CHAT_QUERY',
+      'chat',
+      '',
+      `Chunks: ${retrieval.chunks.length}, Evidence: ${evidenceLevel}, Provider: ${providerMeta.provider_used}`
+    );
 
     res.json({
       assistant_message: {
@@ -160,6 +168,7 @@ router.post('/chat', requireAuth, async (req, res) => {
         structured: {
           ...answerPayload,
           retrieval_mode: retrieval.retrievalMode,
+          provider_meta: providerMeta,
           disclaimer:
             'Informational assistance grounded in indexed official publications. This is not formal legal, accounting, or tax advice.',
         },
@@ -167,10 +176,18 @@ router.post('/chat', requireAuth, async (req, res) => {
         warning_text: warningText,
         citations: formattedCitations,
       },
+      provider_meta: providerMeta,
       retrieved_chunks_count: retrieval.chunks.length,
     });
   } catch (err) {
     console.error('[RAG Chat Error]', (err as Error).message);
+    if (err instanceof AiProviderError) {
+      res.status(err.status).json({
+        code: err.code,
+        error: err.message,
+      });
+      return;
+    }
     res.status(502).json({
       code: 'AI_PROVIDER_ERROR',
       error: `Unable to generate grounded response: ${(err as Error).message}`,

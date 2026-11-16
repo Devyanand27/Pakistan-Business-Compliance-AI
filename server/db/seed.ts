@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { getServerConfig } from '../config/env.js';
 import { db } from './database.js';
 import { chunkDocumentText } from '../ingestion/extractor.js';
 import { embedTexts } from '../services/gemini.js';
@@ -294,11 +295,12 @@ export async function seedDatabase(): Promise<void> {
       );
 
     const docId = Number(res.lastInsertRowid);
+    const embeddingModel = getServerConfig().embeddingModel;
     const embeddings = await embedTexts(chunks.map((c) => `${doc.title} — ${c.sectionTitle}\n${c.chunkText}`));
 
     const insertChunk = db.prepare(
-      `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO document_chunks (document_id, chunk_text, page_number, section_title, chunk_index, embedding, embedding_dim, embedding_model, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     chunks.forEach((chunk, idx) => {
       const vec = embeddings?.[idx];
@@ -311,6 +313,7 @@ export async function seedDatabase(): Promise<void> {
         chunk.chunkIndex,
         blob,
         vec ? vec.length : 0,
+        vec ? embeddingModel : '',
         JSON.stringify({ title: doc.title, source_url: doc.sourceUrl, page: chunk.pageNumber, section: chunk.sectionTitle })
       );
     });
