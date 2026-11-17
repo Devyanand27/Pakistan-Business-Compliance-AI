@@ -41,6 +41,7 @@ bun-debug.log*
 
 # Archives & exports
 *.zip
+updated-files-for-github/
 
 # Operating system & IDE files
 .DS_Store
