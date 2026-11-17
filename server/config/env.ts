@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
-dotenv.config();
+dotenv.config({ path: ['.env.local', '.env'], quiet: true });
 
 export type AiProviderMode = 'auto' | 'gemini' | 'openrouter';
 
@@ -22,6 +22,11 @@ export interface ServerConfig {
   appUrl: string;
   databasePath: string;
   databaseUrl: string;
+  neonDatabaseUrl: string;
+  neonDatabaseUnpooledUrl: string;
+  neonObjectStorageBucket: string;
+  awsRegion: string;
+  awsEndpointUrlS3: string;
   storagePath: string;
   llmModel: string;
   embeddingModel: string;
@@ -39,6 +44,19 @@ let cachedConfig: ServerConfig | null = null;
 
 export function resetServerConfigCache(): void {
   cachedConfig = null;
+}
+
+export function hasNeonPostgres(): boolean {
+  const url = (process.env.NEON_DATABASE_URL || process.env.DATABASE_URL || '').trim();
+  return /^postgres(ql)?:\/\//i.test(url);
+}
+
+export function hasNeonObjectStorage(): boolean {
+  const keyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
+  const secret = (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+  const endpoint = (process.env.AWS_ENDPOINT_URL_S3 || '').trim();
+  const region = (process.env.AWS_REGION || '').trim();
+  return Boolean(keyId && secret && endpoint && region);
 }
 
 export function hasGeminiKey(): boolean {
@@ -110,6 +128,15 @@ export function getServerConfig(): ServerConfig {
 
   const databasePath = path.resolve(process.cwd(), process.env.DATABASE_PATH || './data/compliance.db');
   const databaseUrl = (process.env.DATABASE_URL || '').trim();
+  const neonDatabaseUrl = (process.env.NEON_DATABASE_URL || databaseUrl).trim();
+  const neonDatabaseUnpooledUrl = (
+    process.env.NEON_DATABASE_URL_UNPOOLED ||
+    process.env.DATABASE_URL_UNPOOLED ||
+    neonDatabaseUrl
+  ).trim();
+  const neonObjectStorageBucket = (process.env.NEON_OBJECT_STORAGE_BUCKET || 'assets').trim() || 'assets';
+  const awsRegion = (process.env.AWS_REGION || '').trim();
+  const awsEndpointUrlS3 = (process.env.AWS_ENDPOINT_URL_S3 || '').trim();
   const storagePath = path.resolve(process.cwd(), process.env.STORAGE_PATH || './data/uploads');
   const llmModel = (process.env.LLM_MODEL || 'gemini-4-hydrogen').trim();
   const embeddingModel = (process.env.EMBEDDING_MODEL || 'gemini-embedding-2').trim();
@@ -162,6 +189,11 @@ export function getServerConfig(): ServerConfig {
     appUrl,
     databasePath,
     databaseUrl,
+    neonDatabaseUrl,
+    neonDatabaseUnpooledUrl,
+    neonObjectStorageBucket,
+    awsRegion,
+    awsEndpointUrlS3,
     storagePath,
     llmModel,
     embeddingModel,

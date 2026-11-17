@@ -7,16 +7,27 @@ import { buildServerApp } from '../app.js';
 import {
   getServerConfig,
   hasAnyAiProvider,
+  hasNeonPostgres,
   resetServerConfigCache,
   validateServerConfig,
 } from '../config/env.js';
 import { db, initSchema } from '../db/database.js';
+import { closePostgresPools, runPostgresMigrations } from '../db/postgres.js';
 import { seedDatabase } from '../db/seed.js';
 import { chunkDocumentText, extractDocumentContent } from '../ingestion/extractor.js';
 import { ingestDocumentBuffer } from '../ingestion/pipeline.js';
 import { retrieveRelevantChunks } from '../rag/retriever.js';
-import { requireAdmin, requireAuth, verifyFirebaseIdToken } from '../security/auth.js';
+import {
+  requireAdmin,
+  requireAuth,
+  setAuthVerifierTestHook,
+  verifyFirebaseIdToken,
+} from '../security/auth.js';
 import { validateOfficialUrl } from '../security/ssrf.js';
+import {
+  isObjectStorageAvailable,
+  setObjectStorageTestAdapter,
+} from '../services/objectStorage.js';
 import {
   AiProviderError,
   clearAiResponseCache,
@@ -608,4 +619,211 @@ test('Firestore security rules include global deny catch-all and per-user uid is
   assert.ok(rulesText.includes('request.auth.uid == userId'));
   assert.ok(rulesText.includes('existing().userId == request.auth.uid'));
   assert.ok(rulesText.includes('email_verified == true'));
+});
+
+test('Private user file storage enforces auth, persists files & AI summaries across sessions, isolates two users, and cleans up Neon Postgres + S3 assets', async (t) => {
+  if (!hasNeonPostgres() || !isObjectStorageAvailable()) {
+    t.skip('Neon Postgres / Object Storage credentials not configured in this environment.');
+    return;
+  }
+
+  await runPostgresMigrations();
+
+  const prevAiProvider = process.env.AI_PROVIDER;
+  const prevOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  process.env.AI_PROVIDER = 'openrouter';
+  process.env.OPENROUTER_API_KEY = 'sk-or-v1-mockopenrouterkey12345';
+  resetServerConfigCache();
+
+  setAiProviderTestHooks({
+    openrouterFetch: async (url) => {
+      if (String(url).includes('/api/v1/models')) {
+        return new Response(JSON.stringify({ data: [{ id: getServerConfig().openrouterModel }] }), {
+          status: 200,
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          model: getServerConfig().openrouterModel,
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  plain_language_summary: 'Private uploaded SECP filing memorandum summary saved permanently.',
+                  main_sections: [
+                    { heading: 'Filing Overview', page_reference: 'Page 1', summary: 'Summary of Form A obligations.' },
+                  ],
+                  important_obligations: ['Retain signed annual return proof.'],
+                  key_dates: ['Within 30 days of AGM'],
+                  questions_for_professional: ['Confirm current SECP fee slab.'],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    },
+  });
+
+  setAuthVerifierTestHook((token) => {
+    if (token === 'token-user-a-session-1' || token === 'token-user-a-session-2') {
+      return {
+        uid: 'test-uid-user-a',
+        email: 'usera@example.com',
+        full_name: 'User A',
+        role: 'user',
+        email_verified: true,
+      };
+    }
+    if (token === 'token-user-b-session-1') {
+      return {
+        uid: 'test-uid-user-b',
+        email: 'userb@example.com',
+        full_name: 'User B',
+        role: 'user',
+        email_verified: true,
+      };
+    }
+    throw new Error('Invalid test token');
+  });
+
+  const app = await buildServerApp({ serveFrontend: false, disableRateLimit: true });
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const addr = server.address() as any;
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const createdIdsForUserA: string[] = [];
+
+  try {
+    // 1. Unauthenticated requests rejected with 401
+    const unauthList = await fetch(`${baseUrl}/api/user-files`);
+    assert.equal(unauthList.status, 401);
+
+    // 2. Spoofed PNG signature rejected with 400
+    const badForm = new FormData();
+    badForm.append('file', new Blob(['not-really-a-png'], { type: 'image/png' }), 'fake.png');
+    const badRes = await fetch(`${baseUrl}/api/user-files`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-user-a-session-1' },
+      body: badForm,
+    });
+    assert.equal(badRes.status, 400);
+
+    // 3. User A uploads a TXT file with auto_summarize=true
+    const txtContent = 'SECP Annual Return Memorandum: Company XYZ must maintain signed Form A records within 30 days of AGM.';
+    const uploadForm = new FormData();
+    uploadForm.append('file', new Blob([txtContent], { type: 'text/plain' }), 'secp-memo-test.txt');
+    uploadForm.append('auto_summarize', 'true');
+    uploadForm.append('language', 'en');
+
+    const uploadRes = await fetch(`${baseUrl}/api/user-files`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-user-a-session-1' },
+      body: uploadForm,
+    });
+    assert.equal(uploadRes.status, 201);
+    const uploadJson = (await uploadRes.json()) as any;
+    assert.ok(uploadJson.file?.id);
+    assert.equal(uploadJson.file.original_filename, 'secp-memo-test.txt');
+    assert.equal(uploadJson.file.has_summary, true);
+    assert.ok(uploadJson.file.summary_json?.plain_language_summary?.includes('saved permanently'));
+    assert.equal(uploadJson.file.object_key, undefined, 'Internal S3 object_key must never leak to client');
+    createdIdsForUserA.push(uploadJson.file.id);
+
+    // 4. Simulate logout & fresh login ("token-user-a-session-2"): file + saved summary persist
+    const reloadListRes = await fetch(`${baseUrl}/api/user-files`, {
+      headers: { Authorization: 'Bearer token-user-a-session-2' },
+    });
+    assert.equal(reloadListRes.status, 200);
+    const reloadListJson = (await reloadListRes.json()) as any;
+    const foundAfterRelogin = reloadListJson.files.find((f: any) => f.id === uploadJson.file.id);
+    assert.ok(foundAfterRelogin, 'Uploaded file must persist after logout/login');
+    assert.equal(foundAfterRelogin.has_summary, true);
+    assert.equal(
+      foundAfterRelogin.summary_json.plain_language_summary,
+      'Private uploaded SECP filing memorandum summary saved permanently.'
+    );
+
+    // 5. User A downloads exact bytes + security headers verified
+    const dlRes = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}/download`, {
+      headers: { Authorization: 'Bearer token-user-a-session-2' },
+    });
+    assert.equal(dlRes.status, 200);
+    assert.equal(dlRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.ok((dlRes.headers.get('content-disposition') || '').startsWith('attachment;'));
+    const dlText = await dlRes.text();
+    assert.equal(dlText, txtContent);
+
+    // 6. Strict two-user isolation: User B cannot list, view, download, summarize, or delete User A's file
+    const userBListRes = await fetch(`${baseUrl}/api/user-files`, {
+      headers: { Authorization: 'Bearer token-user-b-session-1' },
+    });
+    assert.equal(userBListRes.status, 200);
+    const userBListJson = (await userBListRes.json()) as any;
+    assert.equal(
+      userBListJson.files.some((f: any) => f.id === uploadJson.file.id),
+      false,
+      'User B must never see User A files'
+    );
+
+    const userBGet = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}`, {
+      headers: { Authorization: 'Bearer token-user-b-session-1' },
+    });
+    assert.equal(userBGet.status, 403);
+
+    const userBDl = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}/download`, {
+      headers: { Authorization: 'Bearer token-user-b-session-1' },
+    });
+    assert.equal(userBDl.status, 403);
+
+    const userBSum = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}/summarize`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-user-b-session-1',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ language: 'en' }),
+    });
+    assert.equal(userBSum.status, 403);
+
+    const userBDel = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer token-user-b-session-1' },
+    });
+    assert.equal(userBDel.status, 403);
+
+    // 7. User A deletes own file -> permanently removed from Postgres + Neon Object Storage
+    const delRes = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer token-user-a-session-2' },
+    });
+    assert.equal(delRes.status, 200);
+    const delJson = (await delRes.json()) as any;
+    assert.equal(delJson.deleted, true);
+
+    const afterDelGet = await fetch(`${baseUrl}/api/user-files/${uploadJson.file.id}`, {
+      headers: { Authorization: 'Bearer token-user-a-session-2' },
+    });
+    assert.equal(afterDelGet.status, 404);
+  } finally {
+    // Cleanup any remaining test records for User A in case an assertion failed mid-test
+    for (const id of createdIdsForUserA) {
+      await fetch(`${baseUrl}/api/user-files/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer token-user-a-session-1' },
+      }).catch(() => {});
+    }
+    setAuthVerifierTestHook(null);
+    setAiProviderTestHooks(null);
+    setObjectStorageTestAdapter(null);
+    if (prevAiProvider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = prevAiProvider;
+    if (prevOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevOpenRouterKey;
+    resetServerConfigCache();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closePostgresPools();
+  }
 });

@@ -56,7 +56,18 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded + '='.repeat(padLen), 'base64');
 }
 
+let testTokenVerifier: ((idToken: string) => Promise<AuthenticatedUser> | AuthenticatedUser) | null = null;
+
+export function setAuthVerifierTestHook(
+  fn: ((idToken: string) => Promise<AuthenticatedUser> | AuthenticatedUser) | null
+): void {
+  testTokenVerifier = fn;
+}
+
 export async function verifyFirebaseIdToken(idToken: string): Promise<AuthenticatedUser> {
+  if (testTokenVerifier) {
+    return testTokenVerifier(idToken);
+  }
   const parts = idToken.split('.');
   if (parts.length !== 3) {
     throw new Error('Malformed Firebase ID token.');

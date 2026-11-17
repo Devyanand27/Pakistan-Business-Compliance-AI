@@ -71,3 +71,25 @@ export async function apiRequest<T = any>(
 
   return data as T;
 }
+
+export async function apiFetchBlob(url: string): Promise<{ blob: Blob; contentType: string }> {
+  let response = await doFetch(url, { method: 'GET' }, false);
+  if (response.status === 401 && auth.currentUser) {
+    response = await doFetch(url, { method: 'GET' }, true);
+  }
+
+  if (!response.ok) {
+    let errMsg = `Download failed with HTTP ${response.status}`;
+    try {
+      const json = await response.json();
+      if (json?.error) errMsg = json.error;
+    } catch {
+      // Ignore parse error on binary error response
+    }
+    throw new ApiError(errMsg, response.status);
+  }
+
+  const blob = await response.blob();
+  const contentType = response.headers.get('content-type') || blob.type || 'application/octet-stream';
+  return { blob, contentType };
+}

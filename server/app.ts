@@ -6,14 +6,18 @@ import {
   getServerConfig,
   hasAnyAiProvider,
   hasGeminiKey,
+  hasNeonPostgres,
   hasOpenRouterKey,
 } from './config/env.js';
 import { db, initSchema } from './db/database.js';
+import { ensurePostgresSchema } from './db/postgres.js';
 import { seedDatabase } from './db/seed.js';
 import adminRoutes from './routes/admin.js';
 import chatRoutes from './routes/chat.js';
 import checklistRoutes from './routes/checklists.js';
 import documentRoutes from './routes/documents.js';
+import userFilesRoutes from './routes/userFiles.js';
+import { isObjectStorageAvailable } from './services/objectStorage.js';
 
 export interface BuildAppOptions {
   serveFrontend?: boolean;
@@ -24,6 +28,13 @@ export async function buildServerApp(options: BuildAppOptions = {}): Promise<exp
   const config = getServerConfig();
   initSchema();
   await seedDatabase();
+  if (hasNeonPostgres()) {
+    try {
+      await ensurePostgresSchema();
+    } catch (err) {
+      console.error('[Neon Postgres Init Warning]', (err as Error).message);
+    }
+  }
 
   const app = express();
   app.set('trust proxy', 1);
@@ -89,7 +100,16 @@ export async function buildServerApp(options: BuildAppOptions = {}): Promise<exp
     });
 
     app.use('/api', apiLimiter);
-    app.use(['/api/chat', '/api/compare', '/api/checklists/generate', '/api/documents/summarize'], aiLimiter);
+    app.use(
+      [
+        '/api/chat',
+        '/api/compare',
+        '/api/checklists/generate',
+        '/api/documents/summarize',
+        '/api/user-files/:id/summarize',
+      ],
+      aiLimiter
+    );
   }
 
   // Health check endpoint (returns non-secret operational configuration diagnostics)
@@ -101,7 +121,10 @@ export async function buildServerApp(options: BuildAppOptions = {}): Promise<exp
       res.json({
         status: 'ok',
         database: 'connected',
-        database_mode: currentCfg.databaseUrl ? 'postgres_configured_sqlite_active' : 'sqlite_fts5',
+        database_mode: currentCfg.neonDatabaseUrl ? 'postgres_configured_sqlite_active' : 'sqlite_fts5',
+        neon_postgres_configured: hasNeonPostgres(),
+        neon_object_storage_configured: isObjectStorageAvailable(),
+        neon_storage_bucket: currentCfg.neonObjectStorageBucket,
         auth_provider: 'firebase',
         firebase_project_id: currentCfg.firebase.projectId,
         indexed_documents: docs,
@@ -124,6 +147,7 @@ export async function buildServerApp(options: BuildAppOptions = {}): Promise<exp
   // Protected & Public Regulatory / RAG API routers (Firebase ID Token authenticated)
   app.use('/api', chatRoutes);
   app.use('/api', documentRoutes);
+  app.use('/api', userFilesRoutes);
   app.use('/api', checklistRoutes);
   app.use('/api/admin', adminRoutes);
 

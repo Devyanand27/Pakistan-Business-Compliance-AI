@@ -197,3 +197,29 @@ export interface IngestionJob {
   started_at: string;
   completed_at: string;
 }
+
+export interface UserFileRecord {
+  id: string;
+  original_filename: string;
+  mime_type: string;
+  extension: string;
+  size_bytes: number;
+  sha256: string;
+  page_count: number;
+  ocr_used: boolean;
+  has_extracted_text: boolean;
+  extracted_text_preview: string;
+  extracted_text?: string;
+  has_summary: boolean;
+  summary_json: any | null;
+  summary_language: Language | null;
+  summary_provider_meta?: {
+    provider_used?: 'gemini' | 'openrouter';
+    model_used?: string;
+    fallback_triggered?: boolean;
+  } | null;
+  summarized_at: string | null;
+  created_at: string;
+  updated_at: string;
+  verification_status: 'user_uploaded_unverified';
+}
